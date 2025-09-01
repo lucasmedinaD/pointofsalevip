@@ -1,28 +1,96 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { useRouter } from 'next/router';
+import { supabase } from '../lib/supabaseClient';
+import axios from 'axios';
 
-const sampleLinks = [
-  { id: 1, url: 'https://amazon.com/product-a', status: 'OK', lastScanned: '2 hours ago' },
-  { id: 2, url: 'https://bestbuy.com/product-b', status: '404 Not Found', lastScanned: '2 hours ago' },
-  { id: 3, url: 'https://walmart.com/product-c', status: 'Out of Stock', lastScanned: '2 hours ago' },
-];
+// A helper to create an authenticated API client
+const createApiClient = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
+  return axios.create({
+    baseURL: '/api', // We'll use a proxy to avoid CORS issues
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+};
+
 
 export default function DashboardPage() {
-  const [links, setLinks] = useState(sampleLinks);
-  const [newLink, setNewLink] = useState('');
+  const { user, loading: authLoading, signOut } = useAuth();
+  const router = useRouter();
 
-  const handleAddLink = (e) => {
-    e.preventDefault();
-    if (!newLink) return;
-    const newLinkObject = {
-      id: links.length + 1,
-      url: newLink,
-      status: 'Pending',
-      lastScanned: 'Never',
-    };
-    setLinks([...links, newLinkObject]);
-    setNewLink('');
+  const [links, setLinks] = useState([]);
+  const [newLink, setNewLink] = useState('');
+  const [loadingLinks, setLoadingLinks] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    // If auth is done and there's no user, redirect to login
+    if (!authLoading && !user) {
+      router.push('/login');
+      return;
+    }
+    // If there is a user, fetch their links
+    if (user) {
+      fetchLinks();
+    }
+  }, [user, authLoading, router]);
+
+  const fetchLinks = async () => {
+    try {
+      setLoadingLinks(true);
+      setError('');
+      const apiClient = await createApiClient();
+      const { data } = await apiClient.get('/links');
+      setLinks(data);
+    } catch (err) {
+      setError('Failed to fetch links. Please try again.');
+      console.error(err);
+    } finally {
+      setLoadingLinks(false);
+    }
   };
 
+  const handleAddLink = async (e) => {
+    e.preventDefault();
+    if (!newLink) return;
+    try {
+      setError('');
+      const apiClient = await createApiClient();
+      const { data: addedLink } = await apiClient.post('/links', { url: newLink });
+      setLinks([addedLink, ...links]);
+      setNewLink('');
+    } catch (err) {
+      setError('Failed to add link. Please make sure the URL is valid.');
+      console.error(err);
+    }
+  };
+
+  const handleDeleteLink = async (linkId) => {
+    try {
+      setError('');
+      const apiClient = await createApiClient();
+      await apiClient.delete(`/links/${linkId}`);
+      setLinks(links.filter(link => link.id !== linkId));
+    } catch (err) {
+       setError('Failed to delete link.');
+       console.error(err);
+    }
+  };
+
+  // Render a loading state while checking for user session or loading links
+  if (authLoading || loadingLinks) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  // If user is authenticated, render the dashboard
   return (
     <div className="min-h-screen bg-gray-100">
       <nav className="bg-white shadow-sm">
@@ -34,7 +102,13 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="flex items-center">
-              <button className="px-4 py-2 text-sm text-gray-700">Logout</button>
+              <span className="text-sm text-gray-600 mr-4">Welcome, {user.email}</span>
+              <button
+                onClick={signOut}
+                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md"
+              >
+                Logout
+              </button>
             </div>
           </div>
         </div>
@@ -42,6 +116,7 @@ export default function DashboardPage() {
 
       <main className="py-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          {error && <div className="mb-4 text-center text-red-600 bg-red-100 p-3 rounded">{error}</div>}
           <div className="mb-8">
             <h2 className="text-2xl font-bold mb-4">Add a new link</h2>
             <form onSubmit={handleAddLink} className="flex">
@@ -66,32 +141,26 @@ export default function DashboardPage() {
             <h2 className="text-2xl font-bold mb-4">Your Links</h2>
             <div className="bg-white shadow overflow-hidden sm:rounded-md">
               <ul role="list" className="divide-y divide-gray-200">
-                {links.map((link) => (
+                {links.length > 0 ? links.map((link) => (
                   <li key={link.id} className="px-4 py-4 sm:px-6">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-medium text-blue-600 truncate">{link.url}</p>
-                      <div className="ml-2 flex-shrink-0 flex">
-                        <p
-                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            link.status === 'OK' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                          }`}
-                        >
-                          {link.status}
-                        </p>
-                      </div>
+                      {/* Status display will be added later */}
                     </div>
                     <div className="mt-2 sm:flex sm:justify-between">
                       <div className="sm:flex">
                         <p className="flex items-center text-sm text-gray-500">
-                          Last scanned: {link.lastScanned}
+                          Added on: {new Date(link.created_at).toLocaleDateString()}
                         </p>
                       </div>
                       <div className="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
-                        <button className="text-red-600 hover:text-red-800">Delete</button>
+                        <button onClick={() => handleDeleteLink(link.id)} className="text-red-600 hover:text-red-800">Delete</button>
                       </div>
                     </div>
                   </li>
-                ))}
+                )) : (
+                  <li className="px-4 py-4 sm:px-6 text-center text-gray-500">You haven't added any links yet.</li>
+                )}
               </ul>
             </div>
           </div>
